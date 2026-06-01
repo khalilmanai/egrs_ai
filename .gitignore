@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+reports/storage/*
+!reports/storage/.gitkeep
+ml/forecasting/models/*
+!ml/forecasting/models/.gitkeep
+*.pkl
+*.egg-info/
+dist/
+.pytest_cache/
