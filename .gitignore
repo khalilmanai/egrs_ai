@@ -4,6 +4,8 @@ __pycache__/
 .env
 reports/storage/*
 !reports/storage/.gitkeep
+reports/sandbox/*
+!reports/sandbox/.gitkeep
 ml/forecasting/models/*
 !ml/forecasting/models/.gitkeep
 *.pkl

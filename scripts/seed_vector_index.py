@@ -1,7 +1,7 @@
 import asyncio
 from sqlalchemy import text
-from data.db import init_db, close_db, get_session_sync
-from data.vector_store import store_consumption_vector, get_vectors_count
+from core.db import init_db, close_db, get_session_sync
+from core.vector_store import store_consumption_vector, get_vectors_count
 from rag.embeddings import build_vectors_for_all_sites
 from config.settings import get_settings
 

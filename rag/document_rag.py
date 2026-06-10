@@ -1,186 +1,143 @@
-import json
-import re
-import requests
+import os
+import tempfile
+import httpx
+import pandas as pd
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from data.document_store import store_chunk, search_similar_chunks, ensure_document_tables
+from config.settings import get_settings
 
-OLLAMA_URL = "http://localhost:11434/api/embed"
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-EMBED_MODEL = "qwen2.5:3b"
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 64
-
-
-async def embed_text(text: str) -> list[float]:
-    r = requests.post(OLLAMA_URL, json={"model": EMBED_MODEL, "input": text}, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-    embeddings = data.get("embeddings", [])
-    if not embeddings:
-        raise ValueError("No embedding returned")
-    return embeddings[0]
+_settings = get_settings()
+OLLAMA_EMBED_MODEL = _settings.embed_model
+CHUNK_SIZE = _settings.embed_chunk_size
+CHUNK_OVERLAP = _settings.embed_chunk_overlap
 
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    paragraphs = re.split(r'\n\s*\n', text)
-    chunks = []
-    buffer = ""
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        if len(buffer) + len(para) < chunk_size:
-            buffer += "\n\n" + para if buffer else para
-        else:
-            if buffer:
-                chunks.append(buffer)
-            buffer = para
-    if buffer:
-        chunks.append(buffer)
-
-    if len(chunks) <= 1:
-        return chunks if chunks else []
-
-    merged = []
-    for i, chunk in enumerate(chunks):
-        if i > 0 and len(chunk) < chunk_size // 2 and merged:
-            merged[-1] += "\n\n" + chunk
-        else:
-            merged.append(chunk)
-
-    result = []
-    for chunk in merged:
-        if len(chunk) > chunk_size * 1.5:
-            words = chunk.split()
-            for i in range(0, len(words), chunk_size // 2):
-                sub = " ".join(words[i:i + chunk_size])
-                if sub:
-                    result.append(sub)
-        else:
-            result.append(chunk)
-    return result
-
-
-def extract_text_from_excel(filepath: str) -> str:
-    import pandas as pd
-    xls = pd.ExcelFile(filepath)
-    parts = []
-    for sheet_name in xls.sheet_names:
-        df = pd.read_excel(filepath, sheet_name=sheet_name)
-        parts.append(f"=== Sheet: {sheet_name} ===")
-        parts.append(df.to_string(index=False))
-    return "\n\n".join(parts)
-
-
-def extract_text_from_file(filepath: str) -> str:
-    ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
-    if ext == "txt":
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+def _extract_text(file_path: str) -> str:
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".txt":
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             return f.read()
-    elif ext in ("xlsx", "xls"):
-        return extract_text_from_excel(filepath)
-    elif ext == "csv":
-        import pandas as pd
-        df = pd.read_csv(filepath)
+    elif ext in (".xlsx", ".xls"):
+        df = pd.read_excel(file_path, sheet_name=None)
+        parts = []
+        for sheet_name, sheet_df in df.items():
+            parts.append(f"--- Feuille: {sheet_name} ---")
+            parts.append(sheet_df.to_string(index=False))
+        return "\n".join(parts)
+    elif ext == ".csv":
+        df = pd.read_csv(file_path)
         return df.to_string(index=False)
-    elif ext == "pdf":
+    elif ext == ".pdf":
         try:
-            import pymupdf
-            doc = pymupdf.open(filepath)
-            return "\n\n".join(page.get_text() for page in doc)
+            import pdfplumber
+            text_parts = []
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        text_parts.append(t)
+            return "\n".join(text_parts)
         except ImportError:
             try:
-                import pdfplumber
-                with pdfplumber.open(filepath) as pdf:
-                    return "\n\n".join(page.extract_text() or "" for page in pdf.pages)
+                import PyPDF2
+                text_parts = []
+                with open(file_path, "rb") as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages:
+                        t = page.extract_text()
+                        if t:
+                            text_parts.append(t)
+                return "\n".join(text_parts)
             except ImportError:
-                raise ValueError("No PDF library available. Install pymupdf or pdfplumber.")
-    else:
-        raise ValueError(f"Unsupported file type: .{ext}")
+                raise RuntimeError("No PDF parser available. Install pdfplumber or PyPDF2.")
+    raise ValueError(f"Unsupported file type: {ext}")
 
 
-async def ingest_document(
-    session: AsyncSession,
-    filepath: str,
-    document_name: str | None = None,
-) -> dict:
-    await ensure_document_tables(session)
+def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+    words = text.split()
+    chunks = []
+    start = 0
+    while start < len(words):
+        end = start + chunk_size
+        chunk = " ".join(words[start:end])
+        if chunk.strip():
+            chunks.append(chunk)
+        start += chunk_size - overlap
+    return chunks if chunks else [text[:chunk_size]]
 
-    if document_name is None:
-        document_name = filepath.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
 
-    text_content = extract_text_from_file(filepath)
-    chunks = chunk_text(text_content)
-
-    total = len(chunks)
-    for i, chunk in enumerate(chunks):
-        if not chunk.strip():
-            continue
-        embedding = await embed_text(chunk)
-        await store_chunk(session, document_name, i, chunk, embedding)
-
-    return {
-        "document_name": document_name,
-        "chunks_indexed": total,
-        "characters": len(text_content),
+async def _embed_texts(texts: list[str]) -> list[list[float]]:
+    settings = get_settings()
+    payload = {
+        "model": OLLAMA_EMBED_MODEL,
+        "input": texts,
     }
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{settings.ollama_host}/api/embed",
+            json=payload,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+    return result.get("embeddings", [])
 
 
-async def query_documents(
+async def ingest_file(
     session: AsyncSession,
-    question: str,
-    top_k: int = 5,
+    file_path: str,
+    filename: str | None = None,
 ) -> dict:
-    await ensure_document_tables(session)
+    file_text = _extract_text(file_path)
+    if not file_text.strip():
+        return {"status": "error", "detail": "No text could be extracted from the file"}
 
-    question_embedding = await embed_text(question)
-    similar = await search_similar_chunks(session, question_embedding, limit=top_k)
+    chunks = _chunk_text(file_text)
+    safe_name = filename or os.path.basename(file_path)
 
-    if not similar:
-        return {
-            "answer": "No relevant documents found to answer this question.",
-            "sources": [],
-        }
+    embeddings = await _embed_texts(chunks)
+    if not embeddings or len(embeddings) != len(chunks):
+        return {"status": "error", "detail": f"Embedding failed: got {len(embeddings)} embeddings for {len(chunks)} chunks"}
 
-    context = "\n\n".join(
-        f"[Document: {s['document_name']}, Section {s['chunk_index']}]\n{s['content']}"
-        for s in similar
-    )
-
-    system_prompt = """You are an AI assistant for Orange Tunisie's EGRS platform.
-Answer questions based ONLY on the provided context. If the context doesn't contain enough information, say so.
-Cite the source document name in your answer. Be concise and factual."""
-
-    user_prompt = f"""## Context from internal documents:
-{context}
-
-## Question:
-{question}
-
-Answer the question using only the context above. Include specific numbers, dates, and document references where applicable."""
-
-    r = requests.post(OLLAMA_CHAT_URL, json={
-        "model": EMBED_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 1024},
-    }, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    answer = data.get("message", {}).get("content", "")
-
-    return {
-        "answer": answer,
-        "sources": [
+    for i, (chunk_text, emb) in enumerate(zip(chunks, embeddings)):
+        vector_str = "[" + ",".join(str(v) for v in emb) + "]"
+        await session.execute(
+            text("""
+                INSERT INTO document_chunks (document_name, chunk_index, content, embedding, metadata)
+                VALUES (:document_name, :chunk_index, :content, CAST(:embedding AS vector(768)), :metadata)
+            """),
             {
-                "document_name": s["document_name"],
-                "chunk_index": s["chunk_index"],
-                "similarity": s["similarity"],
-                "content_preview": s["content"][:200],
-            }
-            for s in similar
-        ],
+                "document_name": safe_name,
+                "chunk_index": i,
+                "content": chunk_text,
+                "embedding": vector_str,
+                "metadata": '{}',
+            },
+        )
+
+    await session.commit()
+    return {
+        "status": "success",
+        "filename": safe_name,
+        "chunks_created": len(chunks),
+        "embedding_model": OLLAMA_EMBED_MODEL,
     }
+
+
+async def ingest_upload(
+    session: AsyncSession,
+    file_bytes: bytes,
+    filename: str,
+) -> dict:
+    ext = os.path.splitext(filename)[1].lower()
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        return await ingest_file(session, tmp_path, filename=filename)
+    finally:
+        os.unlink(tmp_path)
+
+
+async def get_total_chunks(session: AsyncSession) -> int:
+    r = await session.execute(text("SELECT COUNT(*) FROM document_chunks"))
+    return r.scalar() or 0

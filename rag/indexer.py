@@ -3,7 +3,7 @@ Full rebuild of the consumption_vectors index from historical data.
 """
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from data.vector_store import store_consumption_vector, get_years_with_vectors
+from core.vector_store import store_consumption_vector, get_years_with_vectors
 from rag.embeddings import build_vectors_for_all_sites
 
 

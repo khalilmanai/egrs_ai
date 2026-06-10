@@ -1,37 +1,71 @@
+import httpx
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from data.vector_store import search_similar_vectors
-from ml.features import build_query_vector_from_input
+from config.settings import get_settings
+from rag.document_rag import OLLAMA_EMBED_MODEL
 
 
-async def retrieve_similar_sites(
-    session: AsyncSession,
-    consumption_pattern: list[float],
-    limit: int = 20,
-) -> list[dict]:
-    return await search_similar_vectors(session, consumption_pattern, limit=limit)
-
-
-async def retrieve_context_for_new_sites(
-    session: AsyncSession,
-    new_sites: list[dict],
-) -> dict:
-    all_similar = []
-    for site_input in new_sites:
-        query_vec = build_query_vector_from_input(site_input)
-        similar = await retrieve_similar_sites(session, query_vec, limit=10)
-        avg_cons = (
-            sum(s["total_consumption"] or 0 for s in similar) / len(similar)
-            if similar else 0
-        )
-        all_similar.append({
-            "input_site": site_input,
-            "similar_sites": similar,
-            "avg_consumption": avg_cons,
-        })
-    return {
-        "total_new_sites": len(new_sites),
-        "avg_predicted_consumption": sum(
-            s["avg_consumption"] for s in all_similar
-        ),
-        "site_analyses": all_similar,
+async def _embed_query(query: str) -> list[float]:
+    settings = get_settings()
+    payload = {
+        "model": OLLAMA_EMBED_MODEL,
+        "input": [query],
     }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{settings.ollama_host}/api/embed",
+                json=payload,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+        embs = result.get("embeddings", [])
+        return embs[0] if embs else []
+    except Exception:
+        return []
+
+
+async def search_documents(
+    session: AsyncSession,
+    query: str,
+    limit: int = 10,
+    metric: str = "cosine",
+) -> list[dict]:
+    query_vec = await _embed_query(query)
+    if not query_vec:
+        return []
+
+    operator = {"cosine": "<=>", "l2": "<->", "inner": "<#>"}.get(metric, "<=>")
+    vector_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+    try:
+        r = await session.execute(
+            text(f"""
+                SELECT doc_id, filename, chunk_index, content,
+                       (embedding {operator} CAST(:query_vec AS vector(768))) AS distance
+                FROM document_chunks
+                ORDER BY distance
+                LIMIT :limit
+            """),
+            {"query_vec": vector_str, "limit": limit},
+        )
+        return [dict(row._mapping) for row in r]
+    except Exception:
+        return []
+
+
+async def get_context_for_report(
+    session: AsyncSession,
+    query: str,
+    max_chunks: int = 8,
+) -> str:
+    try:
+        results = await search_documents(session, query, limit=max_chunks)
+        if not results:
+            return ""
+        parts = []
+        for r in results:
+            parts.append(f"[{r['filename']} - chunk {r['chunk_index']}] (dist: {r['distance']:.4f})\n{r['content']}")
+        return "\n\n".join(parts)
+    except Exception:
+        return ""

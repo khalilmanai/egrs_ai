@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from data.extractors.consumption import get_monthly_consumption_from_invoices, get_all_sites_with_metadata
+from core.consumption import get_monthly_consumption_from_invoices, get_all_sites
 
 
 async def build_consumption_vector(
@@ -28,7 +28,7 @@ async def build_vectors_for_all_sites(
     monthly_data = await get_monthly_consumption_from_invoices(
         session, start_year=year, end_year=year
     )
-    sites_data = await get_all_sites_with_metadata(session)
+    sites_data = await get_all_sites(session)
     site_meta = {s["site_id"]: s for s in sites_data}
 
     vectors = []

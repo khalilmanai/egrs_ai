@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from api.dependencies import get_db
-from llm.ollama_client import check_ollama_health
+from llm.client import health_check as ollama_health
 
 router = APIRouter(prefix="/health", tags=["Health"])
 
@@ -16,7 +16,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    ollama_ok = await check_ollama_health()
+    ollama_ok = await ollama_health()
 
     return {
         "status": "healthy" if db_ok else "degraded",

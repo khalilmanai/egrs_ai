@@ -1,24 +1,31 @@
+import sys
+
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config.settings import get_settings
-from data.db import init_db, close_db
-from api.routers import health, reports, analytics, ingestion
+from core.db import init_db, close_db
+from api.routers import health, reports_v2, ingestion_v2, training
+
+settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
     await init_db(settings)
     yield
     await close_db()
 
 
 def create_app() -> FastAPI:
-    settings = get_settings()
     app = FastAPI(
         title=settings.app_name,
-        version="1.0.0",
+        version="2.0.0",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -30,10 +37,17 @@ def create_app() -> FastAPI:
     )
     prefix = settings.api_prefix
     app.include_router(health.router, prefix=prefix, tags=["Health"])
-    app.include_router(reports.router, prefix=prefix, tags=["Reports"])
-    app.include_router(analytics.router, prefix=prefix, tags=["Analytics"])
-    app.include_router(ingestion.router, prefix=prefix, tags=["Ingestion"])
+    app.include_router(reports_v2.router, prefix=prefix, tags=["Reports PDF"])
+    app.include_router(ingestion_v2.router, prefix=prefix, tags=["Ingestion"])
+    app.include_router(training.router, prefix=prefix, tags=["Training"])
     return app
 
 
 app = create_app()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8300, reload=False)

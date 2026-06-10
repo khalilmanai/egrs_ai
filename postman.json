@@ -1,0 +1,398 @@
+{
+  "info": {
+    "name": "EGRS AI Service",
+    "description": "Collection complète des endpoints API pour le service EGRS AI — Orange Tunisie.\n\nBase URL: {{base_url}}/api/v1\n\nVariables de collection:\n- base_url: http://localhost:5000\n- site_code: TUN_0091\n- job_id: (rempli après création d'un job)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:5000", "type": "string" },
+    { "key": "site_code", "value": "TUN_0091", "type": "string" },
+    { "key": "job_id", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "health"]
+            },
+            "description": "Vérifie l'état du service : base de données PostgreSQL et connectivité Ollama."
+          },
+          "response": [
+            {
+              "name": "Healthy",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n    \"status\": \"healthy\",\n    \"database\": \"connected\",\n    \"ollama\": \"available\"\n}"
+            },
+            {
+              "name": "Degraded",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n    \"status\": \"degraded\",\n    \"database\": \"connected\",\n    \"ollama\": \"unavailable\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Reports (Synchrones)",
+      "item": [
+        {
+          "name": "POST Global Forecast",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/pdf" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"target_year\": 2026\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/global-forecast",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "global-forecast"]
+            },
+            "description": "Génère un PDF de prévision budgétaire globale pour l'année cible.\n\nParamètres:\n- target_year (int, optionnel): Année cible (2025-2035, défaut: 2027)"
+          },
+          "response": [
+            {
+              "name": "PDF Generated",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/pdf" },
+                { "key": "Content-Disposition", "value": "inline; filename=\"global_forecast_2026.pdf\"" }
+              ],
+              "body": "<binary PDF>"
+            }
+          ]
+        },
+        {
+          "name": "POST Site Forecast",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/pdf" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"site_code\": \"{{site_code}}\",\n    \"target_year\": 2026\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/site-forecast",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "site-forecast"]
+            },
+            "description": "Génère un PDF de prévision pour un site spécifique.\n\nParamètres:\n- site_code (str, requis): Code du site (ex: TUN_0091)\n- target_year (int, optionnel): Année cible (2025-2035, défaut: 2027)"
+          },
+          "response": [
+            {
+              "name": "PDF Generated",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/pdf" },
+                { "key": "Content-Disposition", "value": "inline; filename=\"site_forecast_TUN_0091_2026.pdf\"" }
+              ],
+              "body": "<binary PDF>"
+            }
+          ]
+        },
+        {
+          "name": "POST Yearly Analysis",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/pdf" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"year\": 2025\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/yearly-analysis",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "yearly-analysis"]
+            },
+            "description": "Génère un PDF d'analyse annuelle (bilan) pour l'année spécifiée.\n\nParamètres:\n- year (int, optionnel): Année d'analyse (2020-2030, défaut: 2026)"
+          },
+          "response": [
+            {
+              "name": "PDF Generated",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/pdf" },
+                { "key": "Content-Disposition", "value": "inline; filename=\"yearly_analysis_2025.pdf\"" }
+              ],
+              "body": "<binary PDF>"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Reports (Asynchrones)",
+      "item": [
+        {
+          "name": "POST Async Global Forecast",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"target_year\": 2026\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/async/global-forecast",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "async", "global-forecast"]
+            },
+            "description": "Lance la génération asynchrone d'un PDF de prévision globale. Retourne un job_id pour récupérer le résultat."
+          }
+        },
+        {
+          "name": "POST Async Site Forecast",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"site_code\": \"{{site_code}}\",\n    \"target_year\": 2026\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/async/site-forecast",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "async", "site-forecast"]
+            },
+            "description": "Lance la génération asynchrone d'un PDF de prévision par site."
+          }
+        },
+        {
+          "name": "POST Async Yearly Analysis",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"year\": 2025\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/async/yearly-analysis",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "async", "yearly-analysis"]
+            },
+            "description": "Lance la génération asynchrone d'un PDF d'analyse annuelle."
+          }
+        },
+        {
+          "name": "GET Async Job Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/async/status/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "async", "status", "{{job_id}}"]
+            },
+            "description": "Vérifie le statut d'un job asynchrone.\n\nRemplacer {{job_id}} par la valeur retournée par l'un des endpoints POST async."
+          },
+          "response": [
+            {
+              "name": "Pending",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"pending\",\n    \"error\": null\n}"
+            },
+            {
+              "name": "Running",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"running\",\n    \"error\": null\n}"
+            },
+            {
+              "name": "Done",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"done\",\n    \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Async Job Result",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/pdf" }],
+            "url": {
+              "raw": "{{base_url}}/api/v1/reports/async/result/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "reports", "async", "result", "{{job_id}}"]
+            },
+            "description": "Récupère le PDF généré par un job asynchrone. Le job doit être en statut 'done'.\n\nRéponse succès: application/pdf\nRéponse erreur: JSON avec détails"
+          },
+          "response": [
+            {
+              "name": "Still Processing",
+              "status": "Too Early",
+              "code": 425,
+              "body": "{\"detail\": \"Job still processing\"}"
+            },
+            {
+              "name": "Error",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"error\",\n    \"error\": \"message d'erreur\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ingestion",
+      "item": [
+        {
+          "name": "POST Upload Document",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Fichier à ingérer. Formats supportés: .xlsx, .xls, .csv, .pdf, .txt"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/document",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "document"]
+            },
+            "description": "Téléverse et indexe un document dans la base vectorielle (RAG).\n\nFormats supportés: .xlsx, .xls, .csv, .pdf, .txt\nLe document est chunké, embarqué (nomic-embed-text) et stocké dans PostgreSQL pgvector."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"status\": \"success\",\n    \"filename\": \"rapport_2025.pdf\",\n    \"chunks_created\": 12,\n    \"total_chunks_in_db\": 47\n}"
+            },
+            {
+              "name": "Unsupported File Type",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"detail\": \"Unsupported file type: .docx. Allowed: .xlsx, .xls, .csv, .pdf, .txt\"}"
+            }
+          ]
+        },
+        {
+          "name": "GET Ingestion Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "status"]
+            },
+            "description": "Retourne le nombre total de chunks vectorisés dans la base et la configuration du modèle d'embedding."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"total_chunks\": 35,\n    \"embedding_model\": \"nomic-embed-text\",\n    \"vector_dimension\": 768\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Training",
+      "item": [
+        {
+          "name": "POST Train Model",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": { "mode": "raw", "raw": "" },
+            "url": {
+              "raw": "{{base_url}}/api/v1/train",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "train"]
+            },
+            "description": "Lance l'entraînement asynchrone du modèle XGBoost sur les données de consommation historiques. Retourne un job_id."
+          },
+          "response": [
+            {
+              "name": "Job Created",
+              "status": "Accepted",
+              "code": 202,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"pending\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Training Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/train/status/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "train", "status", "{{job_id}}"]
+            },
+            "description": "Vérifie le statut d'un job d'entraînement."
+          },
+          "response": [
+            {
+              "name": "Done",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"done\",\n    \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Training Result",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/train/result/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "train", "result", "{{job_id}}"]
+            },
+            "description": "Récupère les métriques du modèle entraîné (R², RMSE, feature importances, etc.)."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n    \"job_id\": \"abc123def456\",\n    \"status\": \"done\",\n    \"result\": {\n        \"r2_score\": 0.973,\n        \"rmse\": 2878.5,\n        \"mae\": 298.1,\n        \"feature_importance\": {\n            \"rolling_mean_3\": 0.57,\n            \"month_sin\": 0.12,\n            \"lag_12\": 0.11\n        },\n        \"training_samples\": 1500\n    }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

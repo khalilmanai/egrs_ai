@@ -1,29 +1,23 @@
-BASE_KWH_MONTH = 200
-TECH_KWH = {
-    "2g": 250,
-    "3g": 250,
-    "4g_fdd": 600,
-    "4g_tdd": 400,
-    "5g": 1200,
-}
-CLIMATE_FACTOR_TUNISIA = 1.20
+from config.settings import get_settings
+
+_settings = get_settings()
 
 
 def estimate_site_kwh(has_2g: bool = False, has_3g: bool = False,
                       has_4g_fdd: bool = False, has_4g_tdd: bool = False,
                       has_5g: bool = False) -> float:
-    total = BASE_KWH_MONTH
+    total = _settings.tech_base_kwh_month
     if has_2g:
-        total += TECH_KWH["2g"]
+        total += _settings.tech_2g_kwh
     if has_3g:
-        total += TECH_KWH["3g"]
+        total += _settings.tech_3g_kwh
     if has_4g_fdd:
-        total += TECH_KWH["4g_fdd"]
+        total += _settings.tech_4g_fdd_kwh
     if has_4g_tdd:
-        total += TECH_KWH["4g_tdd"]
+        total += _settings.tech_4g_tdd_kwh
     if has_5g:
-        total += TECH_KWH["5g"]
-    return round(total * CLIMATE_FACTOR_TUNISIA, 2)
+        total += _settings.tech_5g_kwh
+    return round(total * _settings.tech_climate_factor, 2)
 
 
 def estimate_from_config(config: str | None) -> float:
