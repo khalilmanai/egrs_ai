@@ -1,6 +1,6 @@
 param(
     [int]$Port = 5000,
-    [string]$Host = "0.0.0.0",
+    [string]$BindHost = "0.0.0.0",
     [string]$LogFile = "server.log"
 )
 
@@ -12,11 +12,11 @@ $LogPath = Join-Path $ProjectRoot $LogFile
 
 Write-Host "=== EGRS AI Server Launcher ===" -ForegroundColor Cyan
 Write-Host "Port: $Port"
-Write-Host "Host: $Host"
+Write-Host "Host: $BindHost"
 Write-Host "Project: $ProjectRoot"
 Write-Host ""
 
-# Check if already running
+# Check if already running via PID file
 if (Test-Path $PidFile) {
     $OldPid = Get-Content $PidFile -Raw | ForEach-Object { $_.Trim() }
     $Running = Get-Process -Id $OldPid -ErrorAction SilentlyContinue
@@ -24,18 +24,20 @@ if (Test-Path $PidFile) {
         Write-Host "Server already running (PID: $OldPid)" -ForegroundColor Yellow
         exit 0
     }
+    # Stale PID file
     Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }
 
-# Check if port is in use
-$PortInUse = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-if ($PortInUse) {
-    Write-Host "Port $Port already in use. Server may already be running." -ForegroundColor Yellow
-    $Existing = Get-Process -Id $PortInUse.OwningProcess -ErrorAction SilentlyContinue
-    if ($Existing) {
-        Write-Host "Process: $($Existing.ProcessName) (PID: $($Existing.Id))"
+# Quick health check to see if port is already serving
+$HealthUrl = "http://localhost:$Port/api/v1/health"
+try {
+    $existing = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+    if ($existing.StatusCode -eq 200) {
+        Write-Host "Server already running on port $Port." -ForegroundColor Yellow
+        exit 0
     }
-    exit 0
+} catch {
+    Write-Host "Port $Port is free. Starting server..."
 }
 
 # Verify Python environment
@@ -60,9 +62,8 @@ $process.Id | Out-File -FilePath $PidFile -Encoding utf8
 Write-Host "Server starting (PID: $($process.Id))..." -ForegroundColor Green
 
 # Wait for server to be ready (poll /health)
-$Timeout = 30
+$Timeout = 35
 $Elapsed = 0
-$HealthUrl = "http://localhost:$Port/api/v1/health"
 
 Write-Host "Waiting for server to be ready..."
 while ($Elapsed -lt $Timeout) {
