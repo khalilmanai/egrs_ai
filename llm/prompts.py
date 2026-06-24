@@ -18,6 +18,7 @@ GLOBAL_FORECAST_SCHEMA = {
     "properties": {
         "executive_summary": {"type": "string"},
         "trend_analysis": {"type": "string"},
+        "cost_analysis": {"type": "string"},
         "key_risks": {
             "type": "array",
             "items": {"type": "string"},
@@ -35,7 +36,7 @@ GLOBAL_FORECAST_SCHEMA = {
             },
         },
     },
-    "required": ["executive_summary", "trend_analysis", "key_risks", "recommendations"],
+    "required": ["executive_summary", "trend_analysis", "cost_analysis", "key_risks", "recommendations"],
 }
 
 YEAR_ANALYSIS_SCHEMA = {
@@ -44,6 +45,8 @@ YEAR_ANALYSIS_SCHEMA = {
         "executive_summary": {"type": "string"},
         "performance_analysis": {"type": "string"},
         "anomaly_insights": {"type": "string"},
+        "estimated_vs_reel_analysis": {"type": "string"},
+        "alert_analysis": {"type": "string"},
         "recommendations": {
             "type": "array",
             "items": {
@@ -57,7 +60,7 @@ YEAR_ANALYSIS_SCHEMA = {
             },
         },
     },
-    "required": ["executive_summary", "performance_analysis", "anomaly_insights", "recommendations"],
+    "required": ["executive_summary", "performance_analysis", "anomaly_insights", "estimated_vs_reel_analysis", "alert_analysis", "recommendations"],
 }
 
 SITE_FORECAST_SCHEMA = {
@@ -65,6 +68,7 @@ SITE_FORECAST_SCHEMA = {
     "properties": {
         "executive_summary": {"type": "string"},
         "site_analysis": {"type": "string"},
+        "peer_comparison": {"type": "string"},
         "key_risks": {
             "type": "array",
             "items": {"type": "string"},
@@ -82,12 +86,16 @@ SITE_FORECAST_SCHEMA = {
             },
         },
     },
-    "required": ["executive_summary", "site_analysis", "key_risks", "recommendations"],
+    "required": ["executive_summary", "site_analysis", "peer_comparison", "key_risks", "recommendations"],
 }
 
 
 def _fmt(val: float, decimals: int = 0) -> str:
     return f"{val:,.{decimals}f}"
+
+
+def _fmt_pct(val: float) -> str:
+    return f"{val:+.1f}%" if abs(val) < 1000 else f"{val:,.0f}%"
 
 
 def build_global_forecast_prompt(
@@ -96,6 +104,13 @@ def build_global_forecast_prompt(
     insights: dict | None = None,
     health: dict | None = None,
     anomalies: dict | None = None,
+    alert_summary: dict | None = None,
+    sfr_analysis: dict | None = None,
+    mom_changes: list[dict] | None = None,
+    estimated_to_reel: dict | None = None,
+    yearly_totals: list[dict] | None = None,
+    ci_lower: list[float] | None = None,
+    ci_upper: list[float] | None = None,
     doc_context: str | None = None,
     user_prompt: str | None = None,
 ) -> str:
@@ -121,7 +136,7 @@ def build_global_forecast_prompt(
         f"Sites BT: {bt_count} | Sites MT: {mt_count}",
         f"Estimation technique radio: {_fmt(tech_kwh)} kWh/an",
         f"Sites avec alertes SFR: {sfr_affected}",
-        f"Variation N+1/N-1: {yoy_pct}%",
+        f"Variation N+1/N-1: {_fmt_pct(yoy_pct)}",
         f"Incertitude (IC 95%): +/-{ci_pct}%",
     ]
 
@@ -139,7 +154,30 @@ def build_global_forecast_prompt(
         months = ["Janvier","Fevrier","Mars","Avril","Mai","Juin",
                    "Juillet","Aout","Septembre","Octobre","Novembre","Decembre"]
         for i, (m, k, c) in enumerate(zip(months, monthly_kwh, monthly_cost)):
-            lines.append(f"  {m}: {_fmt(k)} kWh ({_fmt(c,2)} TND)")
+            lo = ci_lower[i] if ci_lower and i < len(ci_lower) else 0
+            hi = ci_upper[i] if ci_upper and i < len(ci_upper) else 0
+            lines.append(f"  {m}: {_fmt(k)} kWh ({_fmt(c,2)} TND) [IC: {_fmt(lo)} - {_fmt(hi)}]")
+
+    # Multi-year historical trend
+    if yearly_totals:
+        lines.extend(["", "# HISTORIQUE MULTI-ANNUEL (kWh)"])
+        by_year = {}
+        for d in yearly_totals:
+            y = d["year"]
+            by_year.setdefault(y, 0)
+            by_year[y] += d["total_consumption_kwh"]
+        for y in sorted(by_year):
+            lines.append(f"  {y}: {_fmt(by_year[y])} kWh")
+
+    # MoM changes
+    if mom_changes:
+        lines.extend(["", "# VARIATION MENSUELLE (MoM)"])
+        months_short = ["Jan","Fev","Mar","Avr","Mai","Juin",
+                        "Juil","Aout","Sep","Oct","Nov","Dec"]
+        for c in mom_changes:
+            m = c.get("month", 1) - 1
+            pct = c.get("pct_change", 0)
+            lines.append(f"  {months_short[m] if 0 <= m < 12 else m+1}: {_fmt(c.get('kwh',0))} kWh vs {_fmt(c.get('prev_kwh',0))} ({_fmt_pct(pct)})")
 
     if billing:
         lines.extend(["", "# FACTURATION N-1 PAR DIRECTION"])
@@ -176,6 +214,27 @@ def build_global_forecast_prompt(
                 elif key == "iqr":
                     lines.append(f"  Site {sid}: {a.get('consumption',0)} kWh (hors limite IQR)")
 
+    # Alert breakdown
+    if alert_summary and alert_summary.get("breakdown"):
+        lines.extend(["", "# REPARTITION DES ALERTES"])
+        lines.append(f"  Total alertes: {alert_summary.get('total_alerts',0)}")
+        for a in alert_summary["breakdown"][:8]:
+            lines.append(f"  {a.get('type','?')} / {a.get('severity','?')} / {a.get('status','?')}: {a.get('cnt',0)}")
+
+    if sfr_analysis:
+        lines.extend(["", "# ALERTES SFR"])
+        lines.append(f"  Total alertes SFR: {sfr_analysis.get('total_sfr',0)}")
+        lines.append(f"  Sites affectes: {sfr_analysis.get('sites_affected',0)}")
+
+    if estimated_to_reel:
+        reel_kwh = estimated_to_reel.get("reel", {}).get("total_consumption_kwh", 0)
+        est_kwh = estimated_to_reel.get("estimated", {}).get("total_consumption_kwh", 0)
+        gap_pct = estimated_to_reel.get("gap_estimated_minus_reel", {}).get("consumption_kwh_pct", 0)
+        lines.extend(["", "# ESTIME VS REEL"])
+        lines.append(f"  Consommation reelle: {_fmt(reel_kwh)} kWh")
+        lines.append(f"  Consommation estimee: {_fmt(est_kwh)} kWh")
+        lines.append(f"  Ecart: {_fmt_pct(gap_pct)}")
+
     if doc_context:
         lines.extend(["", "# CONTEXTE DOCUMENTAIRE", doc_context[:3000]])
 
@@ -186,9 +245,10 @@ def build_global_forecast_prompt(
         "",
         "Redige l'analyse detaillee suivante en francais (cite les chiffres et explique leur impact):",
         "1. Resume executif: 4-5 phrases — synthese des chiffres cles, tendance principale, risque majeur, enjeu budgetaire",
-        "2. Analyse des tendances: evolution N-1 vs N+1, saisonnalite, ecart BT/MT, ecart avec estimation technique",
-        "3. Risques identifies: analyses chaque type d'anomalie, impact SFR, sante des sites, facteurs d'incertitude",
-        "4. Recommandations: 4 a 6 actions specifiques chiffrees, priorisees (haute/moyenne/basse), avec impact attendu",
+        "2. Analyse des tendances: evolution N-1 vs N+1, saisonnalite, ecart BT/MT, ecart avec estimation technique, analyse multi-annuelle",
+        "3. Analyse des couts: cout unitaire du kWh, ecarts mensuels, impact budgetaire, comparaison avec l'estime",
+        "4. Risques identifies: analyses chaque type d'anomalie, impact SFR, sante des sites, facteurs d'incertitude, alertes critiques",
+        "5. Recommandations: 4 a 6 actions specifiques chiffrees, priorisees (haute/moyenne/basse), avec impact attendu",
     ])
 
     return "\n".join(lines)
@@ -199,6 +259,11 @@ def build_year_analysis_prompt(
     billing: list[dict] | None = None,
     anomalies: dict | None = None,
     sfr_analysis: dict | None = None,
+    alert_summary: dict | None = None,
+    estimated_to_reel: dict | None = None,
+    mom_changes: list[dict] | None = None,
+    yearly_totals: list[dict] | None = None,
+    yoy_data: dict | None = None,
     doc_context: str | None = None,
     user_prompt: str | None = None,
 ) -> str:
@@ -245,6 +310,44 @@ def build_year_analysis_prompt(
         lines.append(f"  Total alertes: {sfr_analysis.get('total_sfr',0)}")
         lines.append(f"  Sites affectes: {sfr_analysis.get('sites_affected',0)}")
 
+    # Alert breakdown
+    if alert_summary and alert_summary.get("breakdown"):
+        lines.extend(["", "# REPARTITION DES ALERTES"])
+        lines.append(f"  Total toutes alertes: {alert_summary.get('total_alerts',0)}")
+        for a in alert_summary["breakdown"][:8]:
+            lines.append(f"  {a.get('type','?')} / {a.get('severity','?')} / {a.get('status','?')}: {a.get('cnt',0)}")
+
+    # Estimated vs Real
+    if estimated_to_reel:
+        reel_kwh = estimated_to_reel.get("reel", {}).get("total_consumption_kwh", 0)
+        est_kwh = estimated_to_reel.get("estimated", {}).get("total_consumption_kwh", 0)
+        gap_pct = estimated_to_reel.get("gap_estimated_minus_reel", {}).get("consumption_kwh_pct", 0)
+        reel_cost = estimated_to_reel.get("reel", {}).get("total_final_sale_tnd", 0)
+        est_cost = estimated_to_reel.get("estimated", {}).get("total_final_sale_tnd", 0)
+        gap_cost_pct = estimated_to_reel.get("gap_estimated_minus_reel", {}).get("amount_pct", 0)
+        lines.extend(["", "# ESTIME VS REEL"])
+        lines.append(f"  Consommation: reel={_fmt(reel_kwh)} kWh, estime={_fmt(est_kwh)} kWh, ecart={_fmt_pct(gap_pct)}")
+        lines.append(f"  Cout: reel={_fmt(reel_cost,2)} TND, estime={_fmt(est_cost,2)} TND, ecart={_fmt_pct(gap_cost_pct)}")
+
+    # YoY
+    if yoy_data:
+        lines.extend(["", "# VARIATION ANNUELLE"])
+        lines.append(f"  Variation globale: {_fmt_pct(yoy_data.get('overall_yoy_pct', 0))}")
+        lines.append(f"  Consommation N: {_fmt(yoy_data.get('total_current_kwh', 0))} kWh")
+        lines.append(f"  Consommation N-1: {_fmt(yoy_data.get('total_previous_kwh', 0))} kWh")
+        lines.append(f"  Sites compares: {yoy_data.get('total_sites', 0)}")
+        lines.append(f"  Variation absolue moyenne: {yoy_data.get('avg_abs_change_pct', 0):.1f}%")
+
+    # Multi-year
+    if yearly_totals:
+        lines.extend(["", "# HISTORIQUE MULTI-ANNUEL"])
+        by_year = {}
+        for d in yearly_totals:
+            by_year.setdefault(d["year"], 0)
+            by_year[d["year"]] += d["total_consumption_kwh"]
+        for y in sorted(by_year):
+            lines.append(f"  {y}: {_fmt(by_year[y])} kWh")
+
     if doc_context:
         lines.extend(["", "# CONTEXTE DOCUMENTAIRE", doc_context[:3000]])
 
@@ -255,9 +358,11 @@ def build_year_analysis_prompt(
         "",
         "Redige l'analyse detaillee suivante en francais (cite les chiffres et explique leur impact):",
         "1. Resume executif: 4-5 phrases — score sante global, problemes critiques, tendance generale, points d'attention",
-        "2. Analyse des performances: repartition sains/alerte/critique, analyse des 5 plus faibles (score, consommation, alertes), impact SFR, ecarts de consommation",
+        "2. Analyse des performances: repartition sains/alerte/critique, analyse des 5 plus faibles (score, consommation, alertes), impact SFR, ecarts de consommation, tendance multi-annuelle",
         "3. Analyse des anomalies: decris chaque type (Z-score, tendance, IQR) avec sites, valeurs et directions, explique pourquoi c'est significatif",
-        "4. Recommandations: 4 a 6 actions specifiques chiffrees, priorisees (haute/moyenne/basse), avec impact attendu",
+        "4. Analyse Estime vs Reel: compare les ecarts de consommation et cout, explique les causes possibles des ecarts, recommande des actions pour ameliorer la precision",
+        "5. Analyse des alertes: repartition par severite et type, alertes SFR, impact sur la fiabilite des donnees, actions correctives recommandees",
+        "6. Recommandations: 4 a 6 actions specifiques chiffrees, priorisees (haute/moyenne/basse), avec impact attendu",
     ])
 
     return "\n".join(lines)
@@ -266,6 +371,7 @@ def build_year_analysis_prompt(
 def build_site_forecast_prompt(
     site_budget: dict,
     alerts: list[dict] | None = None,
+    estimated_vs_reel_gap: dict | None = None,
     doc_context: str | None = None,
     user_prompt: str | None = None,
 ) -> str:
@@ -315,6 +421,19 @@ def build_site_forecast_prompt(
             lines.append(f"  {m_short}: {_fmt(v)}")
         lines.append(f"  Min: {_fmt(min(monthly))} | Max: {_fmt(max(monthly))} | Moy: {_fmt(sum(monthly)/12)}")
 
+    # Estimated vs Real gap
+    if estimated_vs_reel_gap:
+        g = estimated_vs_reel_gap.get("gap", {})
+        reel_c = estimated_vs_reel_gap.get("reel", {}).get("consumption_kwh", 0)
+        est_c = estimated_vs_reel_gap.get("estimated", {}).get("consumption_kwh", 0)
+        gap_c_pct = g.get("consumption_kwh_pct", 0)
+        reel_a = estimated_vs_reel_gap.get("reel", {}).get("final_sale_tnd", 0)
+        est_a = estimated_vs_reel_gap.get("estimated", {}).get("final_sale_tnd", 0)
+        gap_a_pct = g.get("amount_pct", 0)
+        lines.extend(["", "# ESTIME VS REEL (N-1)"])
+        lines.append(f"  Consommation: reel={_fmt(reel_c)} kWh, estime={_fmt(est_c)} kWh, ecart={_fmt_pct(gap_c_pct)}")
+        lines.append(f"  Montant: reel={_fmt(reel_a,2)} TND, estime={_fmt(est_a,2)} TND, ecart={_fmt_pct(gap_a_pct)}")
+
     if alerts:
         lines.extend(["", f"Alertes SFR actives ({len(alerts)})"])
         for a in alerts[:5]:
@@ -332,9 +451,10 @@ def build_site_forecast_prompt(
         "",
         "Redige l'analyse detaillee suivante en francais (cite les chiffres et explique leur impact):",
         "1. Resume executif: 3-4 phrases — identification, tendance de consommation, comparaison technique radio, budget, alertes eventuelles",
-        "2. Analyse du site: pattern saisonnier mensuel (min/max/moyenne), impact des equipements radio, consequences des alertes SFR si presentes",
-        "3. Risques: facteurs pouvant invalider la prevision (SFR, annee partielle, equipements changes), quantifie l'impact potentiel",
-        "4. Recommandations: 2 a 4 actions specifiques au site, chiffrees et priorisees",
+        "2. Analyse du site: pattern saisonnier mensuel (min/max/moyenne), impact des equipements radio, consequences des alertes SFR si presentes, qualite de l'estimation vs reel",
+        "3. Comparaison entre pairs: situe ce site par rapport a la moyenne des sites de meme type electrique (BT/MT), identifie les ecarts significatifs",
+        "4. Risques: facteurs pouvant invalider la prevision (SFR, annee partielle, equipements changes), quantifie l'impact potentiel",
+        "5. Recommandations: 2 a 4 actions specifiques au site, chiffrees et priorisees",
     ])
 
     return "\n".join(lines)

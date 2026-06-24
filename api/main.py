@@ -10,9 +10,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config.settings import get_settings
 from core.db import init_db, close_db
+from core.logging_config import setup_logging
 from api.routers import health, reports_v2, ingestion_v2, training
 
 settings = get_settings()
+setup_logging(debug=settings.debug, log_file="logs/egrs_ai.log")
 
 
 @asynccontextmanager

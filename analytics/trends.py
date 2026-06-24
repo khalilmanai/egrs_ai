@@ -1,11 +1,13 @@
 import statistics
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter
 
 
 async def compute_yoy_change(session: AsyncSession, year: int) -> dict:
     r = await session.execute(
-        text("""
+        text(f"""
             SELECT curr.site_id,
                    curr.total_consumption as current_kwh,
                    prev.total_consumption as previous_kwh
@@ -17,11 +19,11 @@ async def compute_yoy_change(session: AsyncSession, year: int) -> dict:
               AND curr.total_consumption IS NOT NULL
               AND prev.total_consumption IS NOT NULL
               AND prev.total_consumption > 0
-              AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+              AND {site_filter('s')}
         """),
         {"yr": year},
     )
-    rows = [dict(row._mapping) for row in r]
+    rows = [normalize_query_result(dict(row._mapping)) for row in r]
     if not rows:
         return {"changes": [], "stats": {}}
 
@@ -57,7 +59,7 @@ async def compute_yoy_change(session: AsyncSession, year: int) -> dict:
 
 async def compute_monthly_trends(session: AsyncSession, year: int) -> list[dict]:
     r = await session.execute(
-        text("""
+        text(f"""
             SELECT
                 EXTRACT(MONTH FROM ii.item_date)::int AS month,
                 s."ElecType" AS elec_type,
@@ -70,7 +72,7 @@ async def compute_monthly_trends(session: AsyncSession, year: int) -> list[dict]
             CROSS JOIN tariff_config tc
             WHERE ii.item_type = 0
               AND EXTRACT(YEAR FROM ii.item_date) = :yr
-              AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+              AND {site_filter('s')}
             GROUP BY EXTRACT(MONTH FROM ii.item_date), s."ElecType",
                      tc.kwh_price_bt, tc.kwh_price_mt
             ORDER BY month

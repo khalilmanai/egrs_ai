@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.consumption import get_monthly_consumption_from_invoices, get_alert_aggregates_by_site
+from core.sql_filter import SEASONAL_PROFILE, SEASONAL_FLATNESS_THRESHOLD, site_filter, site_filter_no_alias
 from analytics.features import engineer_features
 from analytics.budget import compute_monthly_budget
 from ml.forecasting.xgboost_model import load_model, predict_with_calibration, apply_sanity_bounds
@@ -10,13 +11,6 @@ from ml.config import SANITY_BOUNDS
 from estimators.tech_consumption import estimate_from_tech_flags
 
 logger = logging.getLogger(__name__)
-
-SEASONAL_PROFILE = {
-    1: 0.92, 2: 0.93, 3: 0.96, 4: 0.99,
-    5: 1.02, 6: 1.05, 7: 1.08, 8: 1.07,
-    9: 1.03, 10: 1.00, 11: 0.96, 12: 0.93,
-}
-SEASONAL_FLATNESS_THRESHOLD = 0.03
 
 
 def _apply_seasonal_shape(predictions: list[float]) -> list[float]:
@@ -55,6 +49,8 @@ def _get_static_features(site_hist: pd.DataFrame) -> dict:
 
 
 def _get_historical_month_value(site_hist: pd.DataFrame, month: int, col: str = "total_consumption_kwh") -> float:
+    if site_hist.empty or col not in site_hist.columns or "month" not in site_hist.columns:
+        return 0.0
     sub = site_hist[site_hist["month"] == month]
     if sub.empty:
         return 0.0
@@ -63,6 +59,8 @@ def _get_historical_month_value(site_hist: pd.DataFrame, month: int, col: str = 
 
 
 def _get_last_n_values(site_hist: pd.DataFrame, n: int) -> list[float]:
+    if site_hist.empty or "total_consumption_kwh" not in site_hist.columns:
+        return []
     vals = site_hist.tail(n)["total_consumption_kwh"].values
     return [float(v) if not pd.isna(v) else 0.0 for v in vals]
 
@@ -220,7 +218,7 @@ async def _compute_tech_estimates(session, site_codes: set[str] | None = None) -
         SELECT sc.site_code, sc.has_2g, sc.has_3g, sc.has_4g_fdd, sc.has_4g_tdd, sc.has_5g
         FROM site_tech_configs sc
         JOIN sites s ON s."SiteCode" = sc.site_code
-        WHERE s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+        WHERE {site_filter('s')}
         {extra_where}
     """), params)
     total = 0.0
@@ -253,8 +251,23 @@ async def compute_global_forecast(
     if historic.empty:
         return None
 
+    # Filter to sites active in the latest complete historical year
+    # so forecast and baseline cover the same site set
+    max_year = int(historic["year"].max())
+    years_with_months = historic.groupby("year")["month"].nunique()
+    complete_years = years_with_months[years_with_months == 12]
+    if not complete_years.empty:
+        ref_year = int(complete_years.index[-1])
+    else:
+        ref_year = max_year
+    sites_in_ref = set(historic[historic["year"] == ref_year]["site_id"].unique())
+    site_ids = [sid for sid in historic["site_id"].unique() if sid in sites_in_ref]
+    logger.info("Forecasting %d sites (ref year=%d, total unique=%d)",
+                len(site_ids), ref_year, len(historic["site_id"].unique()))
+
+    historic = historic[historic["site_id"].isin(site_ids)]
+
     all_predictions = []
-    site_ids = historic["site_id"].unique()
 
     for sid in site_ids:
         site_hist = historic[historic["site_id"] == sid]
@@ -329,7 +342,7 @@ async def compute_site_forecast(
     result = await session.execute(
         text("""SELECT "SiteId", "SiteName", "SiteCode", "Configuration", "ElecType"
                 FROM sites WHERE "SiteCode" = :code
-                  AND "DirectionId" = 1 AND "StatusId" IN (1,3)"""),
+                  AND {site_filter_no_alias()}"""),
         {"code": site_code},
     )
     row = result.fetchone()

@@ -1,6 +1,7 @@
 import asyncio
 from core.db import init_db, close_db, get_session_sync
 from config.settings import get_settings
+from core.sql_filter import site_filter
 from sqlalchemy import text
 
 
@@ -14,7 +15,7 @@ async def main():
                 SELECT s."SiteCode", COUNT(*) as cnt
                 FROM invoice_items ii
                 JOIN sites s ON s."SiteId" = ii.site_id
-                WHERE s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+                WHERE {site_filter('s')}
                   AND ii.item_type = 0
                   AND s."SiteCode" = 'TUN_0091'
                 GROUP BY s."SiteCode"

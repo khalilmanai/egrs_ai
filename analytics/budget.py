@@ -1,6 +1,9 @@
+import logging
 import numpy as np
 import pandas as pd
 from config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 _settings = get_settings()
 PRICE_BT = _settings.kwh_price_bt
@@ -52,7 +55,7 @@ def compute_monthly_budget(forecast_df: pd.DataFrame) -> dict:
     predicted_kwh = forecast_df["predicted_consumption"].values
     std_err = float(predicted_kwh.std()) / max(float(np.sqrt(len(predicted_kwh))), 1)
 
-    return {
+    result = {
         "total_predicted_kwh": float(forecast_df["predicted_consumption"].sum()),
         "total_budget_tnd": float(forecast_df["_cost_tnd"].sum()),
         "monthly_kwh": [round(v, 0) for v in monthly_kwh_arr],
@@ -61,6 +64,9 @@ def compute_monthly_budget(forecast_df: pd.DataFrame) -> dict:
         "monthly_ci_upper": [round(v, 0) for v in monthly_ci_upper],
         "std_error": round(std_err, 2),
     }
+    logger.debug("compute_monthly_budget: total_kwh=%s, total_tnd=%s",
+                 result["total_predicted_kwh"], result["total_budget_tnd"])
+    return result
 
 
 def compute_precomputed_insights(budget: dict) -> dict:
@@ -95,7 +101,7 @@ def compute_precomputed_insights(budget: dict) -> dict:
     ci_pct = round(((total_upper - total_lower) / 2 / total_kwh * 100), 1) if total_kwh else 0
     ci_pct = min(ci_pct, 50.0)
 
-    return {
+    result = {
         "yoy_growth_pct": yoy,
         "total_sites": total_sites,
         "total_kwh": round(total_kwh, 0),
@@ -113,3 +119,6 @@ def compute_precomputed_insights(budget: dict) -> dict:
         "partial_year_warning": budget.get("partial_year_warning", False),
         "historical_year": budget.get("historical_year", 0),
     }
+    logger.debug("compute_precomputed_insights: yoy=%s%%, sites=%d, ci_pct=%s%%",
+                 yoy, total_sites, ci_pct)
+    return result

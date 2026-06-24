@@ -1,5 +1,10 @@
+import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter, site_filter_no_alias
+
+logger = logging.getLogger(__name__)
 
 
 async def get_site_by_code(session: AsyncSession, site_code: str) -> dict | None:
@@ -12,7 +17,7 @@ async def get_site_by_code(session: AsyncSession, site_code: str) -> dict | None
                    "StatusId"
             FROM sites
             WHERE "SiteCode" = :code
-              AND "DirectionId" = 1 AND "StatusId" IN (1,3)
+              AND {site_filter_no_alias()}
             LIMIT 1
         """),
         {"code": site_code},
@@ -20,7 +25,7 @@ async def get_site_by_code(session: AsyncSession, site_code: str) -> dict | None
     row = r.fetchone()
     if not row:
         return None
-    return {
+    result = {
         "site_id": row[0],
         "site_code": row[1],
         "site_name": row[2],
@@ -36,12 +41,13 @@ async def get_site_by_code(session: AsyncSession, site_code: str) -> dict | None
         "max_consumption": float(row[12]) if row[12] else 0,
         "status_id": row[13],
     }
+    return normalize_query_result(result)
 
 
 async def get_site_id_by_code(session: AsyncSession, site_code: str) -> int | None:
     r = await session.execute(
-        text("""SELECT "SiteId" FROM sites WHERE "SiteCode" = :code
-                  AND "DirectionId" = 1 AND "StatusId" IN (1,3)"""),
+        text(f"""SELECT "SiteId" FROM sites WHERE "SiteCode" = :code
+                  AND {site_filter_no_alias()}"""),
         {"code": site_code},
     )
     row = r.fetchone()
@@ -49,8 +55,8 @@ async def get_site_id_by_code(session: AsyncSession, site_code: str) -> int | No
 
 
 async def get_site_count(session: AsyncSession) -> int:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT COUNT(*) FROM sites
-        WHERE "DirectionId" = 1 AND "StatusId" IN (1,3)
+        WHERE {site_filter_no_alias()}
     """))
     return r.scalar() or 0

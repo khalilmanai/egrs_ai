@@ -1,23 +1,25 @@
 import statistics
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter
 
 
 async def detect_zscore_anomalies(
     session: AsyncSession, year: int, z_threshold: float = 2.0
 ) -> dict:
     r = await session.execute(
-        text("""
+        text(f"""
             SELECT cv.site_id, cv.year, cv.total_consumption
             FROM consumption_vectors cv
             JOIN sites s ON s."SiteId" = cv.site_id
             WHERE cv.year = :yr
-              AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+              AND {site_filter('s')}
             ORDER BY cv.site_id
         """),
         {"yr": year},
     )
-    rows = [dict(row._mapping) for row in r]
+    rows = [normalize_query_result(dict(row._mapping)) for row in r]
     if not rows:
         return {"anomalies": [], "stats": {}}
 
@@ -61,7 +63,7 @@ async def detect_trend_anomalies(
     session: AsyncSession, year: int, change_threshold_pct: float = 50.0
 ) -> dict:
     r = await session.execute(
-        text("""
+        text(f"""
             SELECT curr.site_id,
                    curr.total_consumption as current_kwh,
                    prev.total_consumption as previous_kwh
@@ -73,11 +75,11 @@ async def detect_trend_anomalies(
               AND curr.total_consumption IS NOT NULL
               AND prev.total_consumption IS NOT NULL
               AND prev.total_consumption > 0
-              AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+              AND {site_filter('s')}
         """),
         {"yr": year},
     )
-    rows = [dict(row._mapping) for row in r]
+    rows = [normalize_query_result(dict(row._mapping)) for row in r]
     if not rows:
         return {"anomalies": [], "stats": {}}
 
@@ -112,7 +114,7 @@ async def detect_trend_anomalies(
 
 async def detect_iqr_anomalies(session: AsyncSession, year: int) -> dict:
     stats_r = await session.execute(
-        text("""
+        text(f"""
             SELECT
                 COUNT(*) as site_count,
                 ROUND(AVG(cv.total_consumption)::numeric, 2) as avg_kwh,
@@ -122,7 +124,7 @@ async def detect_iqr_anomalies(session: AsyncSession, year: int) -> dict:
             FROM consumption_vectors cv
             JOIN sites s ON s."SiteId" = cv.site_id
             WHERE cv.year = :yr
-              AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+              AND {site_filter('s')}
         """),
         {"yr": year},
     )
@@ -136,14 +138,14 @@ async def detect_iqr_anomalies(session: AsyncSession, year: int) -> dict:
     upper_fence = float(stats["q3"]) + 1.5 * iqr
 
     r = await session.execute(
-        text("""
+        text(f"""
             SELECT cv.site_id, cv.total_consumption,
                    s."SiteCode", s."SiteName"
             FROM consumption_vectors cv
             JOIN sites s ON s."SiteId" = cv.site_id
             WHERE cv.year = :yr
               AND cv.total_consumption IS NOT NULL
-              AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+              AND {site_filter('s')}
               AND (cv.total_consumption < :lower OR cv.total_consumption > :upper)
             ORDER BY cv.total_consumption DESC
         """),

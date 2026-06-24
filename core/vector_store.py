@@ -1,5 +1,10 @@
+import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter
+
+logger = logging.getLogger(__name__)
 
 _OPERATORS = {
     "cosine": "<=>",
@@ -32,17 +37,23 @@ async def store_consumption_vector(
             total_consumption = :total,
             updated_at = NOW()
     """)
-    await session.execute(query, {
-        "site_id": site_id,
-        "year": year,
-        "vector": vector_str,
-        "total": total_consumption,
-        "config": site_configuration,
-        "network_type": network_type_id,
-        "elec_type": electrical_type,
-        "direction": direction_id,
-    })
-    await session.commit()
+    try:
+        await session.execute(query, {
+            "site_id": site_id,
+            "year": year,
+            "vector": vector_str,
+            "total": total_consumption,
+            "config": site_configuration,
+            "network_type": network_type_id,
+            "elec_type": electrical_type,
+            "direction": direction_id,
+        })
+        await session.commit()
+        logger.debug("Stored vector for site_id=%d, year=%d", site_id, year)
+    except Exception as e:
+        logger.error("Failed to store vector for site_id=%d, year=%d: %s", site_id, year, e, exc_info=True)
+        await session.rollback()
+        raise
 
 
 async def search_similar_vectors(
@@ -69,15 +80,21 @@ async def search_similar_vectors(
         FROM consumption_vectors cv
         JOIN sites s ON s."SiteId" = cv.site_id
         WHERE cv.vector IS NOT NULL
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
         ORDER BY distance
         LIMIT :limit
     """)
-    result = await session.execute(query, {
-        "query_vec": str(query_vector),
-        "limit": limit,
-    })
-    return [dict(row._mapping) for row in result]
+    try:
+        result = await session.execute(query, {
+            "query_vec": str(query_vector),
+            "limit": limit,
+        })
+        rows = [normalize_query_result(dict(row._mapping)) for row in result]
+        logger.debug("search_similar_vectors: %d results returned (limit=%d, metric=%s)", len(rows), limit, metric)
+        return rows
+    except Exception as e:
+        logger.error("Failed to search similar vectors: %s", e, exc_info=True)
+        return []
 
 
 async def delete_vectors_for_site(session: AsyncSession, site_id: int):

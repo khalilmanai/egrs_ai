@@ -1,5 +1,10 @@
+import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter, site_filter_no_alias
+
+logger = logging.getLogger(__name__)
 
 
 async def get_monthly_consumption_from_invoices(
@@ -53,11 +58,20 @@ async def get_monthly_consumption_from_invoices(
         LEFT JOIN site_tech_configs st ON st.site_code = s."SiteCode"
         WHERE {where_clause}
           AND ii.item_type = 0
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
         ORDER BY ii.site_id, ii.item_date
     """)
-    result = await session.execute(query, params)
-    return [dict(row._mapping) for row in result]
+    try:
+        result = await session.execute(query, params)
+        rows = [normalize_query_result(dict(row._mapping)) for row in result]
+        if not rows:
+            logger.warning("get_monthly_consumption_from_invoices returned no rows (site_id=%s, start_year=%s, end_year=%s)", site_id, start_year, end_year)
+        else:
+            logger.debug("get_monthly_consumption_from_invoices: %d rows returned", len(rows))
+        return rows
+    except Exception as e:
+        logger.error("Failed to fetch monthly consumption: %s", e, exc_info=True)
+        return []
 
 
 async def get_alert_aggregates_by_site(
@@ -86,16 +100,22 @@ async def get_alert_aggregates_by_site(
         WHERE {alert_where}
         GROUP BY a.site_id
     """)
-    result = await session.execute(query, alert_params)
-    rows = result.fetchall()
-    return {
-        row.site_id: {
-            "active_alert_count": row.active_alert_count,
-            "has_sfr_alert": row.has_sfr_alert,
-            "critical_alert_count": row.critical_alert_count,
+    try:
+        result = await session.execute(query, alert_params)
+        rows = result.fetchall()
+        agg = {
+            row.site_id: {
+                "active_alert_count": row.active_alert_count,
+                "has_sfr_alert": row.has_sfr_alert,
+                "critical_alert_count": row.critical_alert_count,
+            }
+            for row in rows
         }
-        for row in rows
-    }
+        logger.debug("get_alert_aggregates_by_site: %d sites with alerts", len(agg))
+        return agg
+    except Exception as e:
+        logger.error("Failed to fetch alert aggregates: %s", e, exc_info=True)
+        return {}
 
 
 async def get_all_sites(session: AsyncSession) -> list[dict]:
@@ -111,10 +131,17 @@ async def get_all_sites(session: AsyncSession) -> list[dict]:
             "IsSharing" as is_sharing,
             "EstimatedConsumption" as estimated_consumption,
             "MaxConsumption" as max_consumption,
+            "RealConsumption" as real_consumption,
             "StatusId" as status_id
         FROM sites
-        WHERE "DirectionId" = 1 AND "StatusId" IN (1,3)
+        WHERE {site_filter_no_alias()}
         ORDER BY "SiteId"
     """)
-    result = await session.execute(query)
-    return [dict(row._mapping) for row in result]
+    try:
+        result = await session.execute(query)
+        rows = [normalize_query_result(dict(row._mapping)) for row in result]
+        logger.debug("get_all_sites: %d sites returned", len(rows))
+        return rows
+    except Exception as e:
+        logger.error("Failed to fetch all sites: %s", e, exc_info=True)
+        return []

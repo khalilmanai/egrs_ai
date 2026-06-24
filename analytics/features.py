@@ -1,5 +1,8 @@
+import logging
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def engineer_features(
@@ -49,6 +52,7 @@ def engineer_features(
     _engineer_static_features(df)
     _engineer_long_term_features(df)
 
+    logger.debug("engineer_features: %d rows, %d columns after engineering", len(df), len(df.columns))
     return df
 
 

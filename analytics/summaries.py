@@ -1,9 +1,14 @@
-from sqlalchemy import text, func, case
+import logging
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter, site_filter_no_alias
+
+logger = logging.getLogger(__name__)
 
 
 async def get_billing_summary_by_direction(session: AsyncSession, year: int) -> list[dict]:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT
             s."DirectionId" AS direction_id,
             d."Description" AS direction_name,
@@ -20,21 +25,22 @@ async def get_billing_summary_by_direction(session: AsyncSession, year: int) -> 
         CROSS JOIN tariff_config tc
         WHERE ii.item_type = 0
           AND EXTRACT(YEAR FROM ii.item_date) = :year
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
         GROUP BY s."DirectionId", d."Description", s."ElecType",
                  tc.kwh_price_bt, tc.kwh_price_mt
         ORDER BY s."DirectionId", s."ElecType"
     """), {"year": year})
-    rows = [dict(row._mapping) for row in r]
+    rows = [normalize_query_result(dict(row._mapping)) for row in r]
     for row in rows:
         for k in ("total_cost_tnd", "total_tax_tnd", "total_consumption_kwh"):
             if row.get(k) is not None:
                 row[k] = float(row[k])
+    logger.debug("get_billing_summary_by_direction: %d rows for year=%d", len(rows), year)
     return rows
 
 
 async def get_yearly_totals(session: AsyncSession, start_year: int, end_year: int) -> list[dict]:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT
             EXTRACT(YEAR FROM ii.item_date)::int AS year,
             s."ElecType" AS elec_type,
@@ -48,7 +54,7 @@ async def get_yearly_totals(session: AsyncSession, start_year: int, end_year: in
         CROSS JOIN tariff_config tc
         WHERE ii.item_type = 0
           AND EXTRACT(YEAR FROM ii.item_date) BETWEEN :start AND :end
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
         GROUP BY EXTRACT(YEAR FROM ii.item_date), s."ElecType",
                  tc.kwh_price_bt, tc.kwh_price_mt
         ORDER BY year, elec_type
@@ -62,15 +68,15 @@ async def get_yearly_totals(session: AsyncSession, start_year: int, end_year: in
 
 
 async def get_site_count(session: AsyncSession) -> int:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT COUNT(*) FROM sites
-        WHERE "DirectionId" = 1 AND "StatusId" IN (1,3)
+        WHERE {site_filter_no_alias()}
     """))
     return r.scalar() or 0
 
 
 async def get_yearly_estimated_to_reel_ratio(session: AsyncSession, year: int) -> dict:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT
             ii.item_type,
             COUNT(*) AS invoice_count,
@@ -79,7 +85,7 @@ async def get_yearly_estimated_to_reel_ratio(session: AsyncSession, year: int) -
         FROM invoice_items ii
         JOIN sites s ON s."SiteId" = ii.site_id
         WHERE EXTRACT(YEAR FROM ii.item_date) = :year
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
         GROUP BY ii.item_type
         ORDER BY ii.item_type
     """), {"year": year})
@@ -138,7 +144,7 @@ async def get_yearly_estimated_to_reel_ratio(session: AsyncSession, year: int) -
 
 
 async def get_site_estimated_vs_reel_gap(session: AsyncSession, year: int) -> list[dict]:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT
             ii.site_id,
             s."SiteCode" AS site_code,
@@ -150,7 +156,7 @@ async def get_site_estimated_vs_reel_gap(session: AsyncSession, year: int) -> li
         FROM invoice_items ii
         JOIN sites s ON s."SiteId" = ii.site_id
         WHERE EXTRACT(YEAR FROM ii.item_date) = :year
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
         GROUP BY ii.site_id, s."SiteCode", s."SiteName", ii.item_type
         ORDER BY s."SiteCode", ii.item_type
     """), {"year": year})

@@ -2,12 +2,14 @@ import asyncio
 import sys
 import uvicorn
 from config.settings import get_settings
+from core.logging_config import setup_logging
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 if __name__ == "__main__":
     settings = get_settings()
+    setup_logging(debug=settings.debug, log_file="logs/egrs_ai.log")
     if settings.debug:
         print("WARNING: debug mode enables uvicorn reloader. PID tracking only tracks the supervisor process, not workers.")
     uvicorn.run(

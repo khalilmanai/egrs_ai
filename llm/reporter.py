@@ -40,8 +40,10 @@ async def generate_global_forecast_report(
     rag_task = retrieve_context_for_new_sites(session, new_sites) if new_sites else None
     health_task = compute_enterprise_health_summary(session, target_year - 1) if include_enterprise else None
     anomalies_task = run_all_detections(session, target_year - 1) if include_enterprise else None
+    alert_task = get_alert_summary(session)
+    sfr_task = get_sfr_analysis(session)
 
-    tasks = [billing_task]
+    tasks = [billing_task, alert_task, sfr_task]
     if rag_task:
         tasks.append(rag_task)
     if health_task:
@@ -51,10 +53,12 @@ async def generate_global_forecast_report(
 
     results = await asyncio.gather(*tasks)
     billing = results[0]
+    alert_summary = results[1]
+    sfr_analysis = results[2]
     rag_context = None
     health = None
     anomalies = None
-    idx = 1
+    idx = 3
     if rag_task:
         rag_context = results[idx]
         idx += 1
@@ -75,6 +79,8 @@ async def generate_global_forecast_report(
         insights=insights,
         health=health,
         anomalies=anomalies,
+        alert_summary=alert_summary,
+        sfr_analysis=sfr_analysis,
         doc_context=doc_context,
         user_prompt=user_prompt,
     )
@@ -112,11 +118,17 @@ async def generate_year_analysis(
     year: int,
     user_prompt: str | None = None,
 ) -> dict:
-    health, billing, anomalies, sfr = await asyncio.gather(
+    from analytics.summaries import get_yearly_estimated_to_reel_ratio
+    from analytics.trends import compute_yoy_change
+
+    health, billing, anomalies, sfr, alert_summary, estimated_to_reel, yoy_data = await asyncio.gather(
         compute_enterprise_health_summary(session, year),
         get_billing_summary_by_direction(session, year),
         run_all_detections(session, year),
         get_sfr_analysis(session),
+        get_alert_summary(session),
+        get_yearly_estimated_to_reel_ratio(session, year),
+        compute_yoy_change(session, year),
     )
 
     doc_context = await get_context_for_report(
@@ -129,6 +141,9 @@ async def generate_year_analysis(
         billing=billing,
         anomalies=anomalies,
         sfr_analysis=sfr,
+        alert_summary=alert_summary,
+        estimated_to_reel=estimated_to_reel,
+        yoy_data=yoy_data,
         doc_context=doc_context,
         user_prompt=user_prompt,
     )
@@ -170,12 +185,21 @@ async def generate_site_forecast_report(
     if site_budget is None:
         return {"status": "error", "error": f"Site '{site_code}' not found or no data available"}
 
+    from analytics.summaries import get_site_estimated_vs_reel_gap
+
     alerts = []
+    sfr_alerts = []
+    estimated_vs_reel_gap = None
     try:
         alerts = await get_alerts_by_site(session, site_budget.get("site_id"))
         sfr_alerts = [a for a in (alerts or []) if "SFR" in str(a.get("type", "")).upper()]
     except Exception:
-        sfr_alerts = []
+        pass
+    try:
+        site_gaps_all = await get_site_estimated_vs_reel_gap(session, target_year - 1)
+        estimated_vs_reel_gap = next((g for g in site_gaps_all if g["site_code"] == site_code), None)
+    except Exception:
+        pass
 
     doc_context = await get_context_for_report(
         session,
@@ -185,6 +209,7 @@ async def generate_site_forecast_report(
     prompt = build_site_forecast_prompt(
         site_budget=site_budget,
         alerts=sfr_alerts,
+        estimated_vs_reel_gap=estimated_vs_reel_gap,
         doc_context=doc_context,
         user_prompt=user_prompt,
     )

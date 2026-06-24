@@ -2,13 +2,15 @@ import statistics
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.column_utils import normalize_query_result
+from core.sql_filter import site_filter, site_filter_no_alias
 
 
 async def compute_site_health_scores(session: AsyncSession, year: int) -> list[dict]:
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         WITH drs_sites AS (
             SELECT "SiteId" FROM sites
-            WHERE "DirectionId" = 1 AND "StatusId" IN (1,3)
+            WHERE {site_filter_no_alias()}
         ),
         consumption_stats AS (
             SELECT
@@ -63,7 +65,7 @@ async def compute_site_health_scores(session: AsyncSession, year: int) -> list[d
         ORDER BY c.total_consumption DESC
     """), {"yr": year})
 
-    rows = [dict(row._mapping) for row in r]
+    rows = [normalize_query_result(dict(row._mapping)) for row in r]
     if not rows:
         return []
 
@@ -142,11 +144,11 @@ async def compute_enterprise_health_summary(session: AsyncSession, year: int) ->
     top_10 = scores_sorted[-10:]
     top_10.reverse()
 
-    r = await session.execute(text("""
+    r = await session.execute(text(f"""
         SELECT COUNT(*) FROM alerts a
         JOIN sites s ON s."SiteId" = a.site_id
         WHERE a.severity = 'CRITICAL' AND a.status = 'NEW'
-          AND s."DirectionId" = 1 AND s."StatusId" IN (1,3)
+          AND {site_filter('s')}
     """))
     unresolved_critical = r.scalar() or 0
 

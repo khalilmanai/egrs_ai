@@ -1,6 +1,9 @@
+import logging
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 
 async def compute_visits_summary(session: AsyncSession, site_id: int) -> dict:
@@ -77,7 +80,7 @@ async def compute_visits_summary(session: AsyncSession, site_id: int) -> dict:
             "visit_id": r[6],
         }
 
-    return {
+    result = {
         "days_since_last_visit": days_since_visit,
         "last_visit_date": str(last_visit_date)[:19] if last_visit_date else None,
         "last_visit_status": last_visit_status,
@@ -88,3 +91,6 @@ async def compute_visits_summary(session: AsyncSession, site_id: int) -> dict:
         "technician_count_12m": technicians_12m,
         "latest_measurement": latest_measurement,
     }
+    logger.debug("compute_visits_summary for site_id=%d: visits_12m=%d, days_since_visit=%s",
+                 site_id, visits_12m, days_since_visit)
+    return result
